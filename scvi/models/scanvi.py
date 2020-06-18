@@ -36,8 +36,9 @@ class SCANVI(VAE):
         * ``'zinb'`` - Zero-inflated negative binomial distribution
 
     :param y_prior: If None, initialized to uniform probability over cell types
-    :param labels_groups: Label group designations
-    :param use_labels_groups: Whether to use the label groups
+    :param ontology: cell ontology adjacency matrix
+    :param use_ontology: Whether to use the ontology
+    :param kl_symmetric: Whether to use symmetric KL distance
 
     Examples:
         >>> gene_dataset = CortexDataset()
@@ -62,9 +63,10 @@ class SCANVI(VAE):
         log_variational: bool = True,
         reconstruction_loss: str = "zinb",
         y_prior=None,
-        labels_groups: Sequence[int] = None,
-        use_labels_groups: bool = False,
+        ontology: np.array = None,
+        use_ontology: bool = False,
         classifier_parameters: dict = dict(),
+        symmetric_kl: bool = False,
     ):
         super().__init__(
             n_input,
@@ -79,6 +81,7 @@ class SCANVI(VAE):
         )
 
         self.n_labels = n_labels
+        self.symmetric_kl = symmetric_kl
         # Classifier takes n_latent as input
         cls_parameters = {
             "n_layers": n_layers,
@@ -87,7 +90,20 @@ class SCANVI(VAE):
         }
         cls_parameters.update(classifier_parameters)
         self.classifier = Classifier(n_latent, n_labels=n_labels, **cls_parameters)
-
+        self.use_ontology = use_ontology
+        if self.use_ontology:
+            assert ontology is not None, "Specify ontology"
+            self.ontology = ontology
+            self.depth = len(ontology) + 1
+            assert "number of layers has to be greater than 1", self.depth > 1
+            self.classifiers = torch.nn.ModuleList()
+            for x in ontology:
+                self.classifiers.append(
+                    Classifier(n_latent, n_labels=x.shape[0], **cls_parameters)
+                )
+            self.classifiers.append(
+                Classifier(n_latent, n_labels=n_labels, **cls_parameters)
+            )
         self.encoder_z2_z1 = Encoder(
             n_latent,
             n_latent,
@@ -110,46 +126,26 @@ class SCANVI(VAE):
             else (1 / n_labels) * torch.ones(1, n_labels),
             requires_grad=False,
         )
-        self.use_labels_groups = use_labels_groups
-        self.labels_groups = (
-            np.array(labels_groups) if labels_groups is not None else None
-        )
-        if self.use_labels_groups:
-            assert labels_groups is not None, "Specify label groups"
-            unique_groups = np.unique(self.labels_groups)
-            self.n_groups = len(unique_groups)
-            assert (unique_groups == np.arange(self.n_groups)).all()
-            self.classifier_groups = Classifier(
-                n_latent, n_hidden, self.n_groups, n_layers, dropout_rate
-            )
-            self.groups_index = torch.nn.ParameterList(
-                [
-                    torch.nn.Parameter(
-                        torch.tensor(
-                            (self.labels_groups == i).astype(np.uint8),
-                            dtype=torch.uint8,
-                        ),
-                        requires_grad=False,
-                    )
-                    for i in range(self.n_groups)
-                ]
-            )
+
+    def hiearchical_classifier(self, z, depth):
+        # classifier = self.classifiers[depth - 1]
+        if depth == 1:
+            w_y = self.classifiers[depth - 1](z)
+        else:
+            A = torch.cuda.FloatTensor(self.ontology[depth - 2])
+            unw_y = self.classifiers[depth - 1](z)
+            w_g = self.hiearchical_classifier(z, depth - 1)
+            # matrix multiplication:
+            w_y = unw_y + torch.matmul(w_g, A)
+        return w_y
 
     def classify(self, x):
         if self.log_variational:
             x = torch.log(1 + x)
         qz_m, _, z = self.z_encoder(x)
         z = qz_m  # We classify using the inferred mean parameter of z_1 in the latent space
-        if self.use_labels_groups:
-            w_g = self.classifier_groups(z)
-            unw_y = self.classifier(z)
-            w_y = torch.zeros_like(unw_y)
-            for i, group_index in enumerate(self.groups_index):
-                unw_y_g = unw_y[:, group_index]
-                w_y[:, group_index] = unw_y_g / (
-                    unw_y_g.sum(dim=-1, keepdim=True) + 1e-8
-                )
-                w_y[:, group_index] *= w_g[:, [i]]
+        if self.use_ontology:
+            w_y = self.hiearchical_classifier(z, self.depth)
         else:
             w_y = self.classifier(z)
         return w_y
@@ -202,7 +198,7 @@ class SCANVI(VAE):
                 0.0,
             )
 
-        probs = self.classifier(z1)
+        probs = self.classify(x)
         reconst_loss += loss_z1_weight + (
             (loss_z1_unweight).view(self.n_labels, -1).t() * probs
         ).sum(dim=1)
@@ -210,10 +206,19 @@ class SCANVI(VAE):
         kl_divergence = (kl_divergence_z2.view(self.n_labels, -1).t() * probs).sum(
             dim=1
         )
-        kl_divergence += kl(
+        kl_c = kl(
             Categorical(probs=probs),
             Categorical(probs=self.y_prior.repeat(probs.size(0), 1)),
         )
+
+        if self.symmetric_kl:
+            kl_c = 0.5 * kl_c + 0.5 * kl(
+                Categorical(probs=self.y_prior.repeat(probs.size(0), 1)),
+                Categorical(probs=probs),
+            )
+
+        kl_divergence += kl_c
+
         kl_divergence += kl_divergence_l
 
         return reconst_loss, kl_divergence, 0.0
