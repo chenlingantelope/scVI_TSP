@@ -128,7 +128,6 @@ class SCANVI(VAE):
         )
 
     def hiearchical_classifier(self, z, depth):
-        print('get classifier', depth-1)
         # classifier = self.classifiers[depth - 1]
         if depth == 1:
             w_y = self.classifiers[depth - 1](z)
@@ -146,7 +145,6 @@ class SCANVI(VAE):
         qz_m, _, z = self.z_encoder(x)
         z = qz_m  # We classify using the inferred mean parameter of z_1 in the latent space
         if self.use_ontology:
-            print('before running classifier', self.depth)
             w_y = self.hiearchical_classifier(z, self.depth)
         else:
             w_y = self.classifier(z)
