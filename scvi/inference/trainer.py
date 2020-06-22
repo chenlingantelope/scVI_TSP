@@ -161,12 +161,13 @@ class Trainer:
 
         self.on_training_begin()
 
-        for self.epoch in tqdm(
-            range(n_epochs),
-            desc="training",
-            disable=not self.show_progbar,
-            file=sys.stdout,
-        ):
+        # for self.epoch in tqdm(
+        #     range(n_epochs),
+        #     desc="training",
+        #     disable=not self.show_progbar,
+        #     file=sys.stdout,
+        # ):
+        for self.epoch in range(n_epochs):
             self.on_epoch_begin()
             for tensors_list in self.data_loaders_loop():
                 if tensors_list[0][0].shape[0] < 3:
@@ -178,8 +179,9 @@ class Trainer:
                 self.on_iteration_end()
 
             # Computes metrics and controls early stopping
-            if not self.on_epoch_end():
-                break
+            # if not self.on_epoch_end():
+            #     break
+            print("Epoch: ", self.epoch)
 
         if self.early_stopping.save_best_state_metric is not None:
             self.model.load_state_dict(self.best_state_dict)

@@ -1,5 +1,5 @@
 from collections import namedtuple
-
+from typing import List
 import numpy as np
 import logging
 
@@ -11,6 +11,7 @@ from sklearn.svm import SVC
 
 import torch
 from torch.nn import functional as F
+import torch.distributions as db
 
 from scvi.inference import Posterior
 from scvi.inference import Trainer
@@ -192,11 +193,16 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
         self,
         model,
         gene_dataset,
+        n_labels_final: int,
+        labels_of_use,
         n_labelled_samples_per_class=50,
         n_epochs_classifier=1,
         lr_classification=5 * 1e-3,
         classification_ratio=50,
         seed=0,
+        nodes_to_leaves_probs: torch.Tensor = None,
+        indices_labelled: List = None,
+        indices_unlabelled: List = None,
         **kwargs
     ):
         """
@@ -205,30 +211,43 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
         super().__init__(model, gene_dataset, **kwargs)
         self.model = model
         self.gene_dataset = gene_dataset
+        self.nodes_to_leaves_probs = nodes_to_leaves_probs
 
         self.n_epochs_classifier = n_epochs_classifier
         self.lr_classification = lr_classification
         self.classification_ratio = classification_ratio
         n_labelled_samples_per_class_array = [
             n_labelled_samples_per_class
-        ] * self.gene_dataset.n_labels
-        labels = np.array(self.gene_dataset.labels).ravel()
+        ] * n_labels_final
         np.random.seed(seed=seed)
-        permutation_idx = np.random.permutation(len(labels))
-        labels = labels[permutation_idx]
+        permutation_idx = np.random.permutation(len(labels_of_use))
+        labels_of_use_mix = labels_of_use[permutation_idx]
         indices = []
         current_nbrs = np.zeros(len(n_labelled_samples_per_class_array))
-        for idx, (label) in enumerate(labels):
-            label = int(label)
-            if current_nbrs[label] < n_labelled_samples_per_class_array[label]:
-                indices.insert(0, idx)
-                current_nbrs[label] += 1
-            else:
-                indices.append(idx)
-        indices = np.array(indices)
-        total_labelled = sum(n_labelled_samples_per_class_array)
-        indices_labelled = permutation_idx[indices[:total_labelled]]
-        indices_unlabelled = permutation_idx[indices[total_labelled:]]
+        if (indices_labelled is None) or (indices_unlabelled is None):
+            for idx, (label) in enumerate(labels_of_use_mix):
+                label = int(label)
+                if label == -1:
+                    # print("Negative label, not included")
+                    indices.append(idx)
+                elif current_nbrs[label] < n_labelled_samples_per_class_array[label]:
+                    indices.insert(0, idx)
+                    current_nbrs[label] += 1
+                else:
+                    indices.append(idx)
+            indices = np.array(indices)
+            total_labelled = sum(n_labelled_samples_per_class_array)
+            indices_labelled = permutation_idx[indices[:total_labelled]]
+            indices_unlabelled = permutation_idx[indices[total_labelled:]]
+
+        print(
+            "labelled indices: ",
+            np.unique(gene_dataset.labels[indices_labelled].squeeze()),
+        )
+        print(
+            "unlabelled indices: ",
+            np.unique(gene_dataset.labels[indices_unlabelled].squeeze()),
+        )
 
         self.classifier_trainer = ClassifierTrainer(
             model.classifier,
@@ -257,10 +276,11 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
     def loss(self, tensors_all, tensors_labelled):
         loss = super().loss(tensors_all)
         sample_batch, _, _, _, y = tensors_labelled
-        classification_loss = F.cross_entropy(
-            self.model.classify(sample_batch), y.view(-1)
-        )
+        probs = self.model.classify(sample_batch)
+        y_gt = y.view(-1)
+        classification_loss = F.cross_entropy(probs, y_gt)
         loss += classification_loss * self.classification_ratio
+        print(loss.item())
         return loss
 
     def on_epoch_end(self):
@@ -282,6 +302,26 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
         return super().create_posterior(
             model, gene_dataset, shuffle, indices, type_class
         )
+
+    def on_training_loop(self, tensors_list):
+        # Modifies labels!!!
+        tensors_all, tensors_labelled = tensors_list
+        new_tensors_labelled = self.convert_to_leaf_nodes(tensors_labelled)
+        new_tensors_all = self.convert_to_leaf_nodes(tensors_all)
+
+        self.current_loss = loss = self.loss(new_tensors_all, new_tensors_labelled)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+    def convert_to_leaf_nodes(self, tensors):
+        sample_batch, b, c, d, y = tensors
+        if y is None:
+            return tensors
+        y_probs = self.nodes_to_leaves_probs[y]
+        leaves_batch = db.Categorical(probs=y_probs).sample()
+        new_tensors = (sample_batch, b, c, d, leaves_batch)
+        return new_tensors
 
 
 class JointSemiSupervisedTrainer(SemiSupervisedTrainer):

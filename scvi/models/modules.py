@@ -42,7 +42,7 @@ class FCLayers(nn.Module):
         n_layers: int = 1,
         n_hidden: int = 128,
         dropout_rate: float = 0.1,
-        use_batch_norm: bool = True,
+        use_batch_norm: bool = False,
         use_relu: bool = True,
         bias: bool = True,
     ):
@@ -154,9 +154,11 @@ class Encoder(nn.Module):
         n_hidden: int = 128,
         dropout_rate: float = 0.1,
         distribution: str = "normal",
+        library_clamp: bool = False,
     ):
         super().__init__()
 
+        self.library_clamp = library_clamp
         self.distribution = distribution
         self.encoder = FCLayers(
             n_in=n_input,
@@ -191,6 +193,10 @@ class Encoder(nn.Module):
         q = self.encoder(x, *cat_list)
         q_m = self.mean_encoder(q)
         q_v = torch.exp(self.var_encoder(q)) + 1e-4
+        q_v = torch.clamp(q_v, max=1e3)
+
+        if self.library_clamp:
+            q_m = torch.clamp(q_m, max=15)
         latent = self.z_transformation(reparameterize_gaussian(q_m, q_v))
         return q_m, q_v, latent
 
@@ -372,7 +378,8 @@ class Decoder(nn.Module):
         # Parameters for latent distribution
         p = self.decoder(x, *cat_list)
         p_m = self.mean_decoder(p)
-        p_v = torch.exp(self.var_decoder(p))
+        p_v = torch.exp(self.var_decoder(p)) + 1e-16
+        p_v = torch.clamp(p_v, max=1e3)
         return p_m, p_v
 
 

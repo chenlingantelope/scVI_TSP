@@ -2,6 +2,7 @@ from typing import Sequence
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.distributions import Normal, Categorical, kl_divergence as kl
 
 from scvi.models.classifier import Classifier
@@ -134,9 +135,12 @@ class SCANVI(VAE):
         else:
             A = torch.cuda.FloatTensor(self.ontology[depth - 2])
             unw_y = self.classifiers[depth - 1](z)
-            w_g = self.hiearchical_classifier(z, depth - 1)
+            unw_y = unw_y.log()
+            w_g = self.hiearchical_classifier(z, depth - 1).log()
             # matrix multiplication:
             w_y = unw_y + torch.matmul(w_g, A)
+            w_y = w_y - torch.logsumexp(w_y, -1, keepdims=True)
+            w_y = w_y.exp()
         return w_y
 
     def classify(self, x):
@@ -190,6 +194,15 @@ class SCANVI(VAE):
             Normal(ql_m, torch.sqrt(ql_v)),
             Normal(local_l_mean, torch.sqrt(local_l_var)),
         ).sum(dim=1)
+        probs = self.classify(x)
+
+        print("qz2_m :, ", qz2_m.min().item(), qz2_m.max().item())
+        print("qz2_v :, ", qz2_v.min().item(), qz2_v.max().item())
+        print("pz1_m :, ", pz1_m.min().item(), pz1_m.max().item())
+        print("pz1_v :, ", pz1_v.min().item(), pz1_v.max().item())
+        print("ql_m :, ", ql_m.min().item(), ql_m.max().item())
+        print("ql_v :, ", ql_v.min().item(), ql_v.max().item())
+        print("probs :, ", probs.min().item(), probs.max().item())
 
         if is_labelled:
             return (

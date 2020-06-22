@@ -24,6 +24,8 @@ requirements = [
     "hyperopt==0.1.2",
     "anndata>=0.6.22rc1",
     "statsmodels", 'networkx'
+    "obonet",
+    "seaborn"
 ]
 
 setup_requirements = ["pip>=18.1"]
