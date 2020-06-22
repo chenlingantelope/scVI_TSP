@@ -136,11 +136,11 @@ class SCANVI(VAE):
             A = torch.cuda.FloatTensor(self.ontology[depth - 2])
             unw_y = self.classifiers[depth - 1](z)
             unw_y = unw_y.log()
-            w_g = self.hiearchical_classifier(z, depth - 1).log()
+            w_g = self.hiearchical_classifier(z, depth - 1)  # .log()
             # matrix multiplication:
             w_y = unw_y + torch.matmul(w_g, A)
             w_y = w_y - torch.logsumexp(w_y, -1, keepdims=True)
-            w_y = w_y.exp()
+            # w_y = w_y.exp()
         return w_y
 
     def classify(self, x):
@@ -149,7 +149,7 @@ class SCANVI(VAE):
         qz_m, _, z = self.z_encoder(x)
         z = qz_m  # We classify using the inferred mean parameter of z_1 in the latent space
         if self.use_ontology:
-            w_y = self.hiearchical_classifier(z, self.depth)
+            w_y = self.hiearchical_classifier(z, self.depth).exp()
         else:
             w_y = self.classifier(z)
         return w_y
@@ -196,13 +196,36 @@ class SCANVI(VAE):
         ).sum(dim=1)
         probs = self.classify(x)
 
-        print("qz2_m :, ", qz2_m.min().item(), qz2_m.max().item())
-        print("qz2_v :, ", qz2_v.min().item(), qz2_v.max().item())
-        print("pz1_m :, ", pz1_m.min().item(), pz1_m.max().item())
-        print("pz1_v :, ", pz1_v.min().item(), pz1_v.max().item())
-        print("ql_m :, ", ql_m.min().item(), ql_m.max().item())
-        print("ql_v :, ", ql_v.min().item(), ql_v.max().item())
-        print("probs :, ", probs.min().item(), probs.max().item())
+        # print("qz1_m :, ", qz1_m.min().item(), qz1_m.max().item())
+        # print("qz1_v :, ", qz1_v.min().item(), qz1_v.max().item())
+        # print("qz2_m :, ", qz2_m.min().item(), qz2_m.max().item())
+        # print("qz2_v :, ", qz2_v.min().item(), qz2_v.max().item())
+        # print("pz1_m :, ", pz1_m.min().item(), pz1_m.max().item())
+        # print("pz1_v :, ", pz1_v.min().item(), pz1_v.max().item())
+        # print("ql_m :, ", ql_m.min().item(), ql_m.max().item())
+        # print("ql_v :, ", ql_v.min().item(), ql_v.max().item())
+        # print("probs :, ", probs.min().item(), probs.max().item())
+        # print("reconst_loss: ", reconst_loss.min().item(), reconst_loss.max().item())
+        # print(
+        #     "loss_z1_weight: ",
+        #     loss_z1_weight.min().item(),
+        #     loss_z1_weight.max().item(),
+        # )
+        # print(
+        #     "loss_z1_unweight: ",
+        #     loss_z1_unweight.min().item(),
+        #     loss_z1_unweight.max().item(),
+        # )
+        # print(
+        #     "kl_divergence_z2: ",
+        #     kl_divergence_z2.min().item(),
+        #     kl_divergence_z2.max().item(),
+        # )
+        # print(
+        #     "kl_divergence_l: ",
+        #     kl_divergence_l.min().item(),
+        #     kl_divergence_l.max().item(),
+        # )
 
         if is_labelled:
             return (
