@@ -104,15 +104,26 @@ class UnsupervisedTrainer(Trainer):
         return ["train_set"]
 
     def loss(self, tensors):
-        sample_batch, local_l_mean, local_l_var, batch_index, y = tensors
+        sample_batch, local_l_mean, local_l_var, batch_index, _ = tensors
         reconst_loss, kl_divergence_local, kl_divergence_global = self.model(
-            sample_batch, local_l_mean, local_l_var, batch_index, y
+            sample_batch, local_l_mean, local_l_var, batch_index
         )
         loss = (
             self.n_samples
             * torch.mean(reconst_loss + self.kl_weight * kl_divergence_local)
             + kl_divergence_global
         )
+        print("reconst_loss", reconst_loss.min().item(), reconst_loss.max().item())
+        # print(
+        #     "kl_divergence_local",
+        #     kl_divergence_local.min().item(),
+        #     kl_divergence_local.max().item(),
+        # )
+        # print(
+        #     "kl_divergence_global",
+        #     kl_divergence_global.min().item(),
+        #     kl_divergence_global.max().item(),
+        # )
         if self.normalize_loss:
             loss = loss / self.n_samples
         return loss

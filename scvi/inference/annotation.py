@@ -279,8 +279,12 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
         probs = self.model.classify(sample_batch)
         y_gt = y.view(-1)
         classification_loss = F.cross_entropy(probs, y_gt)
+        # print("probs", probs.min().item(), probs.max().item())
+        # print("y_gt", y_gt.min().item(), y_gt.max().item())
         loss += classification_loss * self.classification_ratio
-        print(loss.item())
+        # print("loss: ", loss.item())
+        # print("classification_loss: ", classification_loss.item())
+        # print("####################################################################################")
         return loss
 
     def on_epoch_end(self):
