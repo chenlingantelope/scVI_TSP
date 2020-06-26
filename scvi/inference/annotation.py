@@ -261,6 +261,9 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
         self.labelled_set = self.create_posterior(indices=indices_labelled)
         self.unlabelled_set = self.create_posterior(indices=indices_unlabelled)
 
+        self.indices_labelled = indices_labelled
+        self.indices_unlabelled = indices_unlabelled
+
         for posterior in [self.labelled_set, self.unlabelled_set]:
             posterior.to_monitor = ["reconstruction_error", "accuracy"]
 
