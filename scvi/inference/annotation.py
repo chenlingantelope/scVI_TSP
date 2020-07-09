@@ -193,8 +193,8 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
         self,
         model,
         gene_dataset,
-        n_labels_final: int,
-        labels_of_use,
+        n_labels_final: int = None,
+        labels_of_use=None,
         n_labelled_samples_per_class=50,
         n_epochs_classifier=1,
         lr_classification=5 * 1e-3,
@@ -216,6 +216,11 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
         self.n_epochs_classifier = n_epochs_classifier
         self.lr_classification = lr_classification
         self.classification_ratio = classification_ratio
+
+        if labels_of_use is None or n_labels_final is None:
+            labels_of_use = np.array(self.gene_dataset.labels).ravel()
+            n_labels_final = self.gene_dataset.n_labels
+
         n_labelled_samples_per_class_array = [
             n_labelled_samples_per_class
         ] * n_labels_final
@@ -313,8 +318,12 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
     def on_training_loop(self, tensors_list):
         # Modifies labels!!!
         tensors_all, tensors_labelled = tensors_list
-        new_tensors_labelled = self.convert_to_leaf_nodes(tensors_labelled)
-        new_tensors_all = self.convert_to_leaf_nodes(tensors_all)
+        if self.nodes_to_leaves_probs is not None:
+            new_tensors_labelled = self.convert_to_leaf_nodes(tensors_labelled)
+            new_tensors_all = self.convert_to_leaf_nodes(tensors_all)
+        else:
+            new_tensors_labelled = tensors_labelled
+            new_tensors_all = tensors_all
 
         self.current_loss = loss = self.loss(new_tensors_all, new_tensors_labelled)
         self.optimizer.zero_grad()

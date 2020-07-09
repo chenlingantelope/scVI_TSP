@@ -113,7 +113,7 @@ class UnsupervisedTrainer(Trainer):
             * torch.mean(reconst_loss + self.kl_weight * kl_divergence_local)
             + kl_divergence_global
         )
-        print("reconst_loss", reconst_loss.min().item(), reconst_loss.max().item())
+        # print("reconst_loss", reconst_loss.min().item(), reconst_loss.max().item())
         # print(
         #     "kl_divergence_local",
         #     kl_divergence_local.min().item(),

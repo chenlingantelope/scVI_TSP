@@ -167,7 +167,7 @@ class Trainer:
         #     disable=not self.show_progbar,
         #     file=sys.stdout,
         # ):
-        for self.epoch in range(n_epochs):
+        for self.epoch in tqdm(range(n_epochs)):
             self.on_epoch_begin()
             for tensors_list in self.data_loaders_loop():
                 if tensors_list[0][0].shape[0] < 3:
