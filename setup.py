@@ -23,9 +23,10 @@ requirements = [
     "numba==0.45.0",  # numba 0.45.1 has a conflict with UMAP and numba 0.46.0 with parallelization in loompy
     "hyperopt==0.1.2",
     "anndata>=0.6.22rc1",
-    "statsmodels", 'networkx'
+    "statsmodels",
+    "networkx",
     "obonet",
-    "seaborn"
+    "seaborn",
 ]
 
 setup_requirements = ["pip>=18.1"]

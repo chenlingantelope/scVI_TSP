@@ -12,6 +12,7 @@ class Classifier(nn.Module):
         n_layers=1,
         dropout_rate=0.1,
         logits=False,
+        use_batch_norm=True,
     ):
         super().__init__()
         layers = [
@@ -21,7 +22,7 @@ class Classifier(nn.Module):
                 n_layers=n_layers,
                 n_hidden=n_hidden,
                 dropout_rate=dropout_rate,
-                use_batch_norm=True,
+                use_batch_norm=use_batch_norm,
             ),
             nn.Linear(n_hidden, n_labels),
         ]

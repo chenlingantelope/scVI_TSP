@@ -17,6 +17,7 @@ from scvi.inference import Posterior
 from scvi.inference import Trainer
 from scvi.inference.inference import UnsupervisedTrainer
 from scvi.inference.posterior import unsupervised_clustering_accuracy
+import sklearn.metrics as met
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,21 @@ class AnnotationPosterior(Posterior):
         )
         return compute_predictions(
             model, self, classifier=cls, soft=soft, model_zl=self.model_zl
+        )
+
+    @torch.no_grad()
+    def compute_predictions_full(self):
+        """
+        :return: the true labels and the predicted labels
+        :rtype: 2-tuple of :py:class:`numpy.int32`
+        """
+        model, cls = (
+            (self.sampling_model, self.model)
+            if hasattr(self, "sampling_model")
+            else (self.model, None)
+        )
+        return compute_predictions_full(
+            model, self, classifier=cls, model_zl=self.model_zl
         )
 
     @torch.no_grad()
@@ -121,7 +137,8 @@ class ClassifierTrainer(Trainer):
         sampling_model=None,
         sampling_zl=False,
         use_cuda=True,
-        **kwargs
+        nodes_to_leaves_probs=None,
+        **kwargs,
     ):
         self.sampling_model = sampling_model
         self.sampling_zl = sampling_zl
@@ -133,6 +150,8 @@ class ClassifierTrainer(Trainer):
             test_size=test_size,
             type_class=AnnotationPosterior,
         )
+
+        self.nodes_to_leaves_probs = nodes_to_leaves_probs
         self.train_set.to_monitor = ["accuracy"]
         self.test_set.to_monitor = ["accuracy"]
         self.validation_set.to_monitor = ["accuracy"]
@@ -183,6 +202,27 @@ class ClassifierTrainer(Trainer):
             model, full_set, classifier=cls, soft=soft, model_zl=self.sampling_zl
         )
 
+    def on_training_loop(self, tensors_list):
+        if self.nodes_to_leaves_probs is not None:
+            new_tensors_list = self.convert_to_leaf_nodes(tensors_list[0])
+            new_tensors_list = [new_tensors_list]
+        else:
+            new_tensors_list = tensors_list
+        super().on_training_loop(new_tensors_list)
+        # self.current_loss = loss = self.loss(*tensors_list)
+        # self.optimizer.zero_grad()
+        # loss.backward()
+        # self.optimizer.step()
+
+    def convert_to_leaf_nodes(self, tensors):
+        sample_batch, b, c, d, y = tensors
+        if y is None:
+            return tensors
+        y_probs = self.nodes_to_leaves_probs[y]
+        leaves_batch = db.Categorical(probs=y_probs).sample()
+        new_tensors = (sample_batch, b, c, d, leaves_batch)
+        return new_tensors
+
 
 class SemiSupervisedTrainer(UnsupervisedTrainer):
     r"""The SemiSupervisedTrainer class for the semi-supervised training of an autoencoder.
@@ -203,7 +243,9 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
         nodes_to_leaves_probs: torch.Tensor = None,
         indices_labelled: List = None,
         indices_unlabelled: List = None,
-        **kwargs
+        include_conditionned_elbo: bool = False,
+        classify_full_ontology: bool = False,
+        **kwargs,
     ):
         """
         :param n_labelled_samples_per_class: number of labelled samples per class
@@ -215,7 +257,14 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
 
         self.n_epochs_classifier = n_epochs_classifier
         self.lr_classification = lr_classification
+        self.include_conditionned_elbo = include_conditionned_elbo
+        self.labelled_fraction = len(indices_labelled) / (1.0 * len(indices_unlabelled))
         self.classification_ratio = classification_ratio
+        self.classify_full_ontology = classify_full_ontology
+
+        self.metrics = {
+            "Heldout accuracy": [],
+        }
 
         if labels_of_use is None or n_labels_final is None:
             labels_of_use = np.array(self.gene_dataset.labels).ravel()
@@ -257,6 +306,8 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
         self.classifier_trainer = ClassifierTrainer(
             model.classifier,
             gene_dataset,
+            train_size=0.99,
+            nodes_to_leaves_probs=nodes_to_leaves_probs,
             metrics_to_monitor=[],
             show_progbar=False,
             frequency=0,
@@ -282,11 +333,37 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
         super().__setattr__(key, value)
 
     def loss(self, tensors_all, tensors_labelled):
-        loss = super().loss(tensors_all)
+        if self.include_conditionned_elbo:
+            unsup_loss = super().loss(tensors_all, feed_labels=False)
+            sup_loss = super().loss(tensors_labelled, feed_labels=True)
+            loss = unsup_loss + (self.labelled_fraction * sup_loss)
+        else:
+            loss = super().loss(tensors_all, feed_labels=False)
         sample_batch, _, _, _, y = tensors_labelled
-        probs = self.model.classify(sample_batch)
-        y_gt = y.view(-1)
-        classification_loss = F.cross_entropy(probs, y_gt)
+
+        if not self.classify_full_ontology:
+            probs = self.model.classify(sample_batch)
+            y_gt = y.view(-1)
+            classification_loss = F.cross_entropy(probs, y_gt)
+        else:
+            # Compute all internal node labels
+            all_lbls = [y.view(-1)]
+            for a in self.model.ontology[::-1]:
+                A = torch.cuda.FloatTensor(a)
+                new_labels = A[:, all_lbls[-1].squeeze()].argmax(0)
+                all_lbls.append(new_labels)
+            all_lbls = all_lbls[::-1]
+
+            # Compute predictions
+            preds = []
+            for dep in range(1, self.model.depth + 1):
+                preds.append(self.model.classify(sample_batch, depth=dep))
+
+            # Compute classification loss
+            classification_loss = 0.0
+            for pred, lbl in zip(preds, all_lbls):
+                classification_loss += F.cross_entropy(pred, lbl)
+            classification_loss = classification_loss / len(preds)
         # print("probs", probs.min().item(), probs.max().item())
         # print("y_gt", y_gt.min().item(), y_gt.max().item())
         loss += classification_loss * self.classification_ratio
@@ -297,9 +374,20 @@ class SemiSupervisedTrainer(UnsupervisedTrainer):
 
     def on_epoch_end(self):
         self.model.eval()
-        self.classifier_trainer.train(
-            self.n_epochs_classifier, lr=self.lr_classification
-        )
+
+        if self.n_epochs_classifier != 0:
+            self.classifier_trainer.train(
+                self.n_epochs_classifier, lr=self.lr_classification
+            )
+
+        # with torch.no_grad():
+        #     full = self.create_posterior(
+        #         self.model, train_data, indices=np.arange(len(train_data))
+        #     )
+        #     gt, pred = full.sequential().compute_predictions()
+        #     acc = met.balanced_accuracy_score(gt[where_eval], pred[where_eval])
+        #     print(acc)
+        #     self.metrics["Heldout accuracy"].append(acc)
         self.model.train()
         return super().on_epoch_end()
 
@@ -360,7 +448,7 @@ class AlternateSemiSupervisedTrainer(SemiSupervisedTrainer):
 
 @torch.no_grad()
 def compute_predictions(
-    model, data_loader, classifier=None, soft=False, model_zl=False
+    model, data_loader, classifier=None, soft=False, model_zl=False, depth=None
 ):
     all_y_pred = []
     all_y = []
@@ -370,7 +458,7 @@ def compute_predictions(
         all_y += [labels.view(-1).cpu()]
 
         if hasattr(model, "classify"):
-            y_pred = model.classify(sample_batch)
+            y_pred = model.classify(sample_batch, depth=depth)
         elif classifier is not None:
             # Then we use the specified classifier
             if model is not None:
@@ -395,6 +483,19 @@ def compute_predictions(
     all_y = np.array(torch.cat(all_y))
 
     return all_y, all_y_pred
+
+
+@torch.no_grad()
+def compute_predictions_full(model, data_loader, classifier=None, model_zl=False):
+
+    # Compute predictions for each layer
+    all_preds = []
+    for dep in range(1, model.depth + 1):
+        all_y, all_y_pred = compute_predictions(
+            model, data_loader, classifier=None, soft=True, depth=dep
+        )
+        all_preds.append(all_y_pred)
+    return all_y, all_preds
 
 
 @torch.no_grad()

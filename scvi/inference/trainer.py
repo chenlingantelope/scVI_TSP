@@ -181,7 +181,9 @@ class Trainer:
             # Computes metrics and controls early stopping
             # if not self.on_epoch_end():
             #     break
-            print("Epoch: ", self.epoch)
+            # print("Epoch: ", self.epoch)
+
+            self.on_epoch_end()
 
         if self.early_stopping.save_best_state_metric is not None:
             self.model.load_state_dict(self.best_state_dict)

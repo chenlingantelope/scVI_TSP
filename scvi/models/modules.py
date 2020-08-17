@@ -44,6 +44,7 @@ class FCLayers(nn.Module):
         dropout_rate: float = 0.1,
         use_batch_norm: bool = False,
         use_relu: bool = True,
+        use_tanh: bool = False,
         bias: bool = True,
     ):
         super().__init__()
@@ -55,6 +56,13 @@ class FCLayers(nn.Module):
         else:
             self.n_cat_list = []
 
+        if use_tanh:
+            activation = nn.Tanh()
+        elif use_relu:
+            activation = nn.ReLU()
+        else:
+            activation = None
+    
         self.fc_layers = nn.Sequential(
             collections.OrderedDict(
                 [
@@ -69,7 +77,7 @@ class FCLayers(nn.Module):
                             nn.BatchNorm1d(n_out, momentum=0.01, eps=0.001)
                             if use_batch_norm
                             else None,
-                            nn.ReLU() if use_relu else None,
+                            activation,
                             nn.Dropout(p=dropout_rate) if dropout_rate > 0 else None,
                         ),
                     )
